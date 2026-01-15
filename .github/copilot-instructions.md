@@ -6,11 +6,12 @@ OHI is a high-performance middleware for detecting LLM hallucinations by decompo
 ## 🏗️ Architecture & Structure
 
 - **Monorepo Structure**:
-  - `api/`: Python FastAPI backend (Hexagonal Architecture).
-  - `frontend/`: Next.js 16+ App Router web application.
-  - `ingestion/`: High-performance Python pipeline for Wikipedia ingestion.
-  - `benchmark/`: Research-grade evaluation suite.
-  - `docker-compose.yml`: Context for all running services (Neo4j, Qdrant, Redis, vLLM, MCP).
+    - `src/api/`: Python FastAPI backend (Hexagonal Architecture).
+    - `src/frontend/`: Next.js 16+ App Router web application.
+    - `src/ingestion/`: High-performance Python pipeline for Wikipedia ingestion.
+    - `src/benchmark/`: Research-grade evaluation suite.
+    - `src/ohi-mcp-server/`: MCP Server (Node.js).
+    - `docker/compose/docker-compose.yml`: Context for all running services (Neo4j, Qdrant, Redis, vLLM, MCP).
 
 ### Service Map
 | Service | Technology | Role | Port |
@@ -109,13 +110,13 @@ VerificationResult (cached + returned)
 
 ---
 
-## 🧠 Backend / Python (`api/`, `ingestion/`, `benchmark/`)
+## 🧠 Backend / Python (`src/api/`, `src/ingestion/`, `src/benchmark/`)
 
 ### Architecture Pattern: Hexagonal (Ports & Adapters)
-STRICTLY follow this separation in `api/src/open_hallucination_index/`:
+STRICTLY follow this separation in `src/api/src/open_hallucination_index/`:
 
 ```
-api/src/open_hallucination_index/
+src/api/src/open_hallucination_index/
 ├── domain/           # Pure business logic (NO external imports)
 │   ├── entities.py   # Claim, Evidence, EvidenceSource
 │   ├── results.py    # VerificationResult, TrustScore, CitationTrace
@@ -162,8 +163,8 @@ api/src/open_hallucination_index/
 
 ### Testing
 - Use `pytest` with `pytest-asyncio`.
-- **API Tests**: `pytest api/tests/`
-- **Benchmark Tests**: `pytest benchmark/`
+- **API Tests**: `pytest src/api/tests/`
+- **Benchmark Tests**: `pytest src/benchmark/`
 
 ---
 
@@ -204,7 +205,7 @@ source_weights = {
 
 ---
 
-## ⚛️ Frontend / React (`frontend/`)
+## ⚛️ Frontend / React (`src/frontend/`)
 
 ### Tech Stack
 - **Framework**: Next.js 16 (App Router).
@@ -224,38 +225,67 @@ source_weights = {
 ## 🛠️ Workflows & Commands
 
 ### Setup & run
-- **Full Stack**: `docker compose up -d`
-- **Rebuild API**: `docker compose build ohi-api && docker compose up -d ohi-api`
+- **Full Stack**: `docker compose -f docker/compose/docker-compose.yml up -d`
+- **Rebuild API**: `docker compose -f docker/compose/docker-compose.yml build ohi-api && docker compose -f docker/compose/docker-compose.yml up -d ohi-api`
 
-### API Development (`api/`)
+### API Development (`src/api/`)
 ```bash
-cd api
-python -m venv venv && source venv/bin/activate  # Windows: venv\Scripts\activate
+cd src/api
+python -m venv .venv && source .venv/bin/activate  # Windows: .venv\Scripts\activate
 pip install -e ".[dev]"                          # Install dev deps
 pytest                                           # Run tests
 uvicorn src.open_hallucination_index.api.main:app --reload  # Dev server
 ```
 
-### Frontend Development (`frontend/`)
+### Frontend Development (`src/frontend/`)
 ```bash
-cd frontend
+cd src/frontend
 npm install
 npm run dev      # Start dev server on :3000
 npm run test     # Run Vitest
 npm run db:push  # Push schema changes to Supabase/Postgres
 ```
 
-### Ingestion (`ingestion/`)
+### Ingestion (`src/ingestion/`)
 ```bash
+cd src/ingestion
 python -m ingestion --limit 1000  # Run Wikipedia ingestion pipeline
 ```
 
-### Benchmark (`benchmark/`)
+### Benchmark (`src/benchmark/`)
 ```bash
-pip install -e benchmark/
+cd src/benchmark
+pip install -e .
 python -m benchmark                              # Run full suite
 docker exec ohi-benchmark python -m benchmark   # Run inside container
 ```
+
+---
+
+## 📌 Subproject Instructions (per‑project VENV)
+
+- **API** (`src/api/`)
+    - VENV: `src/api/.venv`
+    - Python deps from `pyproject.toml` only.
+    - Dockerfile: `docker/api/Dockerfile`
+
+- **Ingestion** (`src/ingestion/`)
+    - VENV: `src/ingestion/.venv`
+    - Python deps from `pyproject.toml` only.
+    - Uses Neo4j/Qdrant; same network as API.
+
+- **Benchmark** (`src/benchmark/`)
+    - VENV: `src/benchmark/.venv`
+    - Python deps from `pyproject.toml` only.
+    - Output to `benchmark_results/` (mounted in compose).
+
+- **Frontend** (`src/frontend/`)
+    - Node deps via `package.json`.
+    - Docker build context: `src/frontend/`.
+
+- **MCP Server** (`src/ohi-mcp-server/`)
+    - Node deps via `package.json`.
+    - Dockerfile: `docker/mcp-server/Dockerfile` (own image, deployed alongside API).
 
 ---
 
