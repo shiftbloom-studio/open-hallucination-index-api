@@ -86,7 +86,7 @@ Services (ports as exposed in compose):
 - Nginx (80/443)
 - Cloudflared tunnel (optional)
 
-LLM model in compose: **cyankiwi/Hermes-4-14B-AWQ-4bit** (GPU).
+LLM model in compose: **Qwen/Qwen2.5-14B-Instruct-AWQ** (GPU).
 
 ---
 
