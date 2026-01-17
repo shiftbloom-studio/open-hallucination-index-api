@@ -1,148 +1,177 @@
 # Open Hallucination Index - Copilot Instructions
 
-You are an expert developer working on the **Open Hallucination Index (OHI)**. OHI is a high-performance middleware platform for detecting LLM hallucinations by decomposing claims and verifying them against trusted knowledge sources (Neo4j, Qdrant, MCP).
+OHI is a middleware platform for detecting LLM hallucinations via claim decomposition and multi-source verification.
 
 ---
 
-## 🧭 Monorepo map (must respect)
+## 🧭 Monorepo Structure
 
-- `src/api/` – Python FastAPI backend (Hexagonal Architecture)
-- `src/frontend/` – Next.js 16 App Router UI
-- `src/ingestion/` – High‑performance Wikipedia ingestion pipeline
-- `src/benchmark/` – Research‑grade evaluation suite
-- `src/ohi-mcp-server/` – MCP server (Node.js)
-- `docker/compose/docker-compose.yml` – Full stack orchestration
-- `docker/README.md` – Docker stack documentation
-
----
-
-## 🧠 Core verification pipeline (API)
-
-Orchestrated by `VerifyTextUseCase`:
-
-1. Cache lookup (Redis; input hash + claim hash)
-2. Claim decomposition (LLM; fallback to single-claim)
-3. Claim routing (ClaimRouter → domain + source priorities)
-4. Evidence collection (AdaptiveEvidenceCollector; local tier → MCP tier)
-5. Verification decision (HybridVerificationOracle)
-6. Trust scoring (WeightedScorer)
-7. Cache + trace persistence (Redis; 12h TTL for knowledge-track)
-
-Available strategies (`VerificationStrategy`):
-
-- `graph_exact`, `vector_semantic`, `hybrid`, `cascading`, `mcp_enhanced`, `adaptive` (default)
+| Path | Role | Tech |
+|------|------|------|
+| `src/api/` | Verification API | Python 3.14+, FastAPI, Hexagonal |
+| `src/frontend/` | UI | Next.js 16, React 19, Tailwind v4 |
+| `src/ohi-mcp-server/` | External knowledge | Node.js, MCP protocol |
+| `gui_ingestion_app/` | Wikipedia ingestion | Python, GPU embeddings |
+| `gui_benchmark_app/` | Evaluation suite | Python, statistical tests |
+| `docker/compose/` | Full stack | Neo4j, Qdrant, Redis, vLLM |
 
 ---
 
-## ✅ Hexagonal architecture rules (API)
+## 🏗️ API Hexagonal Architecture (STRICT)
 
-STRICT separation under `src/api/src/open_hallucination_index/`:
+Under `src/api/`:
+```
+interfaces/   → ABCs (ports): stores.py, verification.py, decomposition.py, etc.
+adapters/     → Concrete impls: neo4j.py, qdrant.py, redis_*.py, openai.py
+pipeline/     → Domain services: oracle.py, decomposer.py, collector.py, scorer.py
+services/     → Use cases: verify.py (VerifyTextUseCase), track.py
+config/       → DI wiring: dependencies.py (lifespan_manager), settings.py
+models/       → Domain entities: entities.py, results.py, track.py
+```
 
-- `domain/`: pure business logic only
-- `ports/`: abstract interfaces (ABCs)
-- `adapters/`: concrete integrations (Neo4j, Qdrant, Redis, MCP, LLM)
-- `application/`: use‑case orchestration
-- `infrastructure/`: configuration + DI wiring
-
-Do not import external infrastructure inside `domain/`.
-
----
-
-## 🔌 Knowledge sources
-
-Local:
-- Neo4j graph store
-- Qdrant vector store (384‑dim, all‑MiniLM‑L12‑v2)
-
-External (via `ohi-mcp-server`):
-- Wikipedia/Wikidata/DBpedia
-- OpenAlex, Crossref, EuropePMC
-- PubMed, ClinicalTrials.gov
-- GDELT, World Bank, OSV
-- Context7 (documentation)
+**Rules:**
+- `pipeline/` and `models/` must NOT import from `adapters/` or `config/`
+- Adapters implement interfaces from `interfaces/`
+- DI is wired in `config/dependencies.py` via FastAPI lifespan
+- Use `typing.Annotated` for FastAPI dependency injection
 
 ---
 
-## ⚛️ Frontend guidelines
+## 🔄 Verification Pipeline Flow
 
-- Next.js 16 App Router
-- Prefer Server Components; use `"use client"` only for interactivity
-- React Query for server state; Server Actions where appropriate
-- UI pattern: shadcn/ui + Tailwind v4
+`VerifyTextUseCase` in `services/verify.py` orchestrates:
+1. **Cache check** → `RedisCacheAdapter` (SHA-256 hash key)
+2. **Claim decomposition** → `LLMClaimDecomposer` (LLM extraction with fallback)
+3. **Claim routing** → `ClaimRouter` (domain classification + source priorities)
+4. **Evidence collection** → `AdaptiveEvidenceCollector` (local tier → MCP tier)
+5. **Verification** → `HybridVerificationOracle` (strategy-based decision)
+6. **Scoring** → `WeightedScorer` (trust score with confidence)
+7. **Trace storage** → `RedisTraceAdapter` (12h TTL for knowledge-track)
 
----
-
-## 🐳 Docker stack essentials
-
-Services (ports as exposed in compose):
-
-- Neo4j (7474/7687)
-- Qdrant (6333/6334)
-- Redis (6379)
-- vLLM (8000)
-- MCP server (8083 → 8080 in-container)
-- API (8080 internal)
-- Frontend (3000 internal)
-- Nginx (80/443)
-- Cloudflared tunnel (optional)
-
-LLM model in compose: **Qwen/Qwen2.5-14B-Instruct-AWQ** (GPU).
+**Strategies** (`VerificationStrategy` enum in `interfaces/verification.py`):
+- `adaptive` (default): tiered local-first with early-exit
+- `hybrid`: graph + vector parallel
+- `cascading`: graph first, vector fallback
+- `mcp_enhanced`: MCP first, local fallback
 
 ---
 
-## 🔧 Development workflows
+## 🔧 Development Commands
 
-API:
-- venv: `src/api/.venv`
-- install: `pip install -e "src/api[dev]"`
-- run: `ohi-server`
+```bash
+# API (from src/api/)
+pip install -e ".[dev]"   # Install with dev deps
+ohi-server                # Run API server
 
-Frontend:
-- `npm install`, `npm run dev`
+# Frontend (from src/frontend/)
+npm install && npm run dev
 
-Ingestion:
-- `python -m ingestion --limit 1000`
+# Docker full stack (from repo root)
+docker compose -f docker/compose/docker-compose.yml up -d
 
-Benchmark:
-- `python -m benchmark` or `docker exec ohi-benchmark python -m benchmark`
+# Rebuild after code changes to ohi-api or ohi-mcp-server
+docker compose -f docker/compose/docker-compose.yml up -d --build ohi-api ohi-mcp-server
 
----
+# Ingestion (from gui_ingestion_app/ingestion/)
+python -m ingestion --limit 1000
 
-## ✅ Coding standards
+# Benchmark
+python -m benchmark  # or use gui_benchmark_app/launch_gui.bat
+```
 
-- Python 3.14+ features allowed
-- Strict typing; use `typing.Annotated` for FastAPI DI
-- Async for I/O‑bound operations
-- Respect existing linting (ruff, mypy)
-
----
-
-## 🧾 Documentation priorities
-
-Whenever editing or adding functionality, keep documentation aligned:
-
-- Main overview: `README.md`
-- API detail: `src/api/README.md`
-- MCP detail: `src/ohi-mcp-server/README.md`
-- Benchmark: `src/benchmark/README.md`
-- Ingestion: `src/ingestion/README.md`
-- Frontend: `src/frontend/README.md`
-- Docker stack: `docker/README.md`
+**⚠️ After changing `src/api/` or `src/ohi-mcp-server/`**: Always rebuild and restart with `docker compose up -d --build`
 
 ---
 
-## ⚠️ Critical project context
+## 🌐 Nginx Configuration (CRITICAL)
 
-- LLM is local (vLLM); do not assume OpenAI API availability
-- MCP evidence can be persisted to Neo4j + Qdrant
-- Redis enables caching and knowledge‑track endpoints
-- API key auth is optional (disabled when API_API_KEY is empty)
+The nginx config at `docker/nginx/nginx.conf` handles all routing and is **complex**:
+
+- **Upstreams**: `ohi_frontend` (port 3000), `ohi_api` (port 8080)
+- **Rate limiting**: 60 req/min per IP (`limit_req_zone`)
+- **Cloudflare integration**: mTLS origin pull, `CF-Connecting-IP` header, origin lock
+- **Timeouts**: 240s connect, 300s send/read (required for slow LLM responses)
+- **Local dev**: HTTP on port 80 for `localhost`/`127.0.0.1`
+- **Tunnel ingress**: Port 8080 for Cloudflare tunnel (Docker-internal)
+
+**When modifying network behavior**, check:
+1. Upstream definitions and health checks
+2. Proxy timeouts (API can take minutes)
+3. Cloudflare mTLS requirements (`ssl_verify_client on`)
+4. Rate limit zones
 
 ---
 
-## ✅ Expected behavior for Copilot
+## ⚙️ Key Environment Variables
 
-- Preserve hexagonal boundaries
-- Keep changes minimal and focused
-- Update docs when behavior changes
-- Avoid breaking public API endpoints
+| Prefix | Purpose | Example |
+|--------|---------|---------|
+| `LLM_*` | vLLM/OpenAI-compatible | `LLM_BASE_URL=http://localhost:8000/v1` |
+| `NEO4J_*` | Graph DB | `NEO4J_URI=bolt://localhost:7687` |
+| `QDRANT_*` | Vector DB | `QDRANT_HOST=localhost`, `QDRANT_COLLECTION_NAME=wikipedia_hybrid` |
+| `REDIS_*` | Cache | `REDIS_ENABLED=true`, `REDIS_HOST=localhost` |
+| `VERIFY_*` | Pipeline tuning | `VERIFY_DEFAULT_STRATEGY=adaptive` |
+| `API_*` | Server config | `API_PORT=8080`, `API_API_KEY=` (empty = no auth) |
+
+See `src/api/config/settings.py` for all options with defaults.
+
+---
+
+## 📊 Data Store Patterns
+
+**Neo4j** (`adapters/neo4j.py`):
+- 27 relationship types (ingestion-aligned): `LINKS_TO`, `IN_CATEGORY`, `MENTIONS`, person/org/geo relations
+- Specialized queries: `query_person_facts()`, `query_organization_facts()`, `query_geographic_facts()`
+
+**Qdrant** (`adapters/qdrant.py`):
+- Collection: `wikipedia_hybrid` (384-dim, all-MiniLM-L12-v2)
+- Hybrid search: dense + sparse (BM25) vectors
+
+**Redis**:
+- Result cache: SHA-256 hash of input text (16 chars)
+- Claim cache: SHA-256 hash of claim text (24 chars), long TTL
+- Trace storage: knowledge-track with 12h TTL
+
+---
+
+## ⚛️ Frontend Patterns
+
+- **App Router first**: Server Components by default
+- **Client islands**: Use `"use client"` only for interactivity (forms, charts)
+- **Data fetching**: React Query + Server Actions
+- **API proxy**: `/api/ohi/*` routes to backend
+- **UI**: shadcn/ui components, Tailwind v4, Zod validation
+
+---
+
+## ⚠️ Critical Constraints
+
+1. **LLM is local** (vLLM) - do not assume OpenAI API availability
+2. **Extreme latencies**: ohi-api and vLLM can take **multiple minutes** per request - never set short timeouts
+3. **Slow container startup**: vLLM takes 30-60s to load models; ohi-api waits for vLLM health - don't assume services are ready immediately after `docker compose up`
+4. **MCP evidence persists** to Neo4j + Qdrant when `VERIFY_PERSIST_MCP_EVIDENCE=true`
+5. **Redis optional** but disables caching and knowledge-track when unavailable
+6. **API key auth** disabled when `API_API_KEY` is empty string
+7. **GPU required** for vLLM and fast embeddings in ingestion
+8. **Always rebuild Docker** after changing `src/api/` or `src/ohi-mcp-server/`
+9. **For architectural changes**: also review `docker/compose/docker-compose.yml` and relevant `Dockerfile`s
+
+---
+
+## ✅ Coding Standards
+
+- Python 3.14+ features allowed (match statements, type hints)
+- Strict typing everywhere; `mypy --strict` compatible
+- Async for all I/O-bound operations
+- Linting: `ruff check` + `ruff format`
+- Docstrings: module-level explanation + Args/Returns for public APIs
+- **No summary/update markdown files** — do not create new `.md` files to document changes; only update existing READMEs for major feature additions
+
+---
+
+## 🎯 Efficiency Guidelines
+
+- **Stay focused** — complete tasks with minimal tangents
+- **Batch related edits** — use multi-file edits when possible
+- **Don't over-verify** — services take time to start; trust healthchecks
+- **Read before writing** — understand existing patterns before adding code
